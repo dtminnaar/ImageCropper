@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -11,6 +12,7 @@ namespace ImageCropper
     {
         private Point _center;
         private Image _original;
+        private Bitmap _thumbnail;
         private FileInfo _file;
         private bool _changed = false;
         private const string THUMBNAIL = ".thumbnail";
@@ -124,9 +126,27 @@ namespace ImageCropper
         private void LoadFile(string filename)
         {
             this.Text = $"Thumbnail Creator";
-            pbThumbnail.Image = null;
-            pbViewer.Image = null;
             _changed = false;
+            if (pbThumbnail.Image != null)
+            {
+                pbThumbnail.Image.Dispose();
+                pbThumbnail.Image = null;
+            }
+            if (pbViewer.Image != null)
+            {
+                pbViewer.Image.Dispose();
+                pbViewer.Image = null;
+            }
+            if (_original != null)
+            {
+                _original.Dispose();
+                _original = null;
+            }
+            if (_thumbnail != null)
+            {
+                _thumbnail.Dispose();
+                _thumbnail = null;
+            }
 
             _file = new FileInfo(filename);
             var name = _file.Name.Chop(_file.Extension);
@@ -143,6 +163,35 @@ namespace ImageCropper
                 Image img = LoadFromFile(_file.FullName);
                 _original = (Image)img.Clone();
                 pbViewer.Image = img;
+            }
+        }
+        public Image ClipToCircle(Image srcImage, PointF center, float radius, Color backGround)
+        {
+            Image dstImage = new Bitmap(srcImage); //new Bitmap(srcImage.Width, srcImage.Height, srcImage.PixelFormat);
+
+            using (Graphics g = Graphics.FromImage(dstImage))
+            {
+                RectangleF r = new RectangleF(center.X - radius, center.Y - radius,
+                                                         radius * 2, radius * 2);
+
+                // enables smoothing of the edge of the circle (less pixelated)
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+
+                // fills background color
+                using (Brush br = new SolidBrush(backGround))
+                {
+                    g.FillRectangle(br, 0, 0, dstImage.Width, dstImage.Height);
+                }
+
+                // adds the new ellipse & draws the image again 
+                using (GraphicsPath path = new GraphicsPath())
+                {
+                    path.AddEllipse(r);
+                    g.SetClip(path);
+                }
+                g.DrawImage(srcImage, 0, 0);
+
+                return dstImage;
             }
         }
 
@@ -164,32 +213,66 @@ namespace ImageCropper
             var rectangle = new Rectangle(left, top, size * 2, size * 2);
             var bitmap = new Bitmap(_original);
             var crop = bitmap.Clone(rectangle, System.Drawing.Imaging.PixelFormat.DontCare);
-            var thumbnail = new Bitmap(crop, new Size(200, 200));
-
-            pbThumbnail.Image = thumbnail;
+            _thumbnail = new Bitmap(crop, new Size(200, 200));
+            
+            pbThumbnail.Image = ClipToCircle(_thumbnail, new PointF(100,100), 100, Color.FromArgb(128,0,0,0));
         }
 
         private void SaveThumbnail()
         {
-            if (_file == null || pbThumbnail.Image == null)
+            if (_file == null || _thumbnail == null)
                 return;
 
             _changed = false;
 
             var newName = $"{_file.FullName.Chop(_file.Extension)}{THUMBNAIL}.jpg";
-            pbThumbnail.Image.Save(newName, System.Drawing.Imaging.ImageFormat.Jpeg);
+            _thumbnail.Save(newName, System.Drawing.Imaging.ImageFormat.Jpeg);
             this.NotifyPanel.Visible = true;
             notifyTimer.Enabled = true;
+            UpdateJson();
         }
 
-        private List<string> GetFiles()
+        // This is custom logic we use to track all the thumbnails in a .json resource
+        private void UpdateJson()
+        {
+            var files = GetFiles(true);
+            if (files.Count == 0)
+                return;
+
+            //var thumbnailData = new Dictionary<int, List<ThumbnailInfo>>();
+            var data = files.Select(f =>
+            {
+                var regex = new System.Text.RegularExpressions.Regex(@"^(\d+)\.(\d+)\.\S+\.\w\.thumbnail\.jpg$");
+                var matches = regex.Match(f.Name).Groups;
+                if (matches.Count == 3)
+                {
+                    var id = int.Parse(matches[1].Value);
+                    return new
+                    {
+                        Id = id,
+                        FileName = f.Name
+                    };
+                }
+                return null;
+            }).Where(x => x != null).GroupBy(g => g.Id).Select(x => new
+            {
+                Id = x.Key,
+                Data = x.Select(s => s.FileName).OrderBy(o => o).ToList()
+            }).OrderBy(o => o.Id).ToDictionary(x => x.Id, y => y.Data);
+
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(data, Newtonsoft.Json.Formatting.Indented);
+            var dataFile = System.IO.Path.Combine(_file.DirectoryName, "thumbnails.json");
+            File.WriteAllText(dataFile, json);
+        }
+
+        private List<FileInfo> GetFiles(bool onlyThumbnails = false)
         {
             if (_file != null)
             {
-                var files = _file.Directory.GetFiles().Where(x => !x.Name.Contains(THUMBNAIL)).Select(x => x.FullName).OrderBy(x => x).ToList();
+                var files = _file.Directory.GetFiles().Where(x => x.Name.Contains(THUMBNAIL) == onlyThumbnails).OrderBy(x => x.Name).ToList();
                 return files;
             }
-            return new List<string>();
+            return new List<FileInfo>();
         }
         private void DoNextPrev(bool next)
         {
@@ -216,7 +299,7 @@ namespace ImageCropper
             }
 
             var files = GetFiles();
-            var index = files.IndexOf(_file.FullName);
+            var index = files.FindIndex(f => f.FullName == _file.FullName);
 
             if (next)
             {
@@ -234,7 +317,7 @@ namespace ImageCropper
 
             if (index >= 0 && index < files.Count())
             {
-                LoadFile(files[index]);
+                LoadFile(files[index].FullName);
             }
         }
         private void OnNextClick(object sender, EventArgs e)
