@@ -15,7 +15,11 @@ namespace ImageCropper
         private Bitmap _thumbnail;
         private FileInfo _file;
         private bool _changed = false;
+
         private const string THUMBNAIL = ".thumbnail";
+        private const float THUMBNAIL_RADIUS = 100;
+        private PointF THUMBNAIL_CENTER = new PointF(THUMBNAIL_RADIUS, THUMBNAIL_RADIUS);
+        private Color THUMBNAIL_BACKGROUND = Color.FromArgb(128, 0, 0, 0);
 
         public ThumbnailCreator()
         {
@@ -113,13 +117,19 @@ namespace ImageCropper
             if (name.EndsWith(THUMBNAIL))
             {
                 if (File.Exists(filename))
-                    pbThumbnail.Image = LoadFromFile(filename);
+                {
+                    _thumbnail = new Bitmap(LoadFromFile(filename));
+                    pbThumbnail.Image = ClipToCircle(_thumbnail, THUMBNAIL_CENTER, THUMBNAIL_RADIUS, THUMBNAIL_BACKGROUND);
+                }
             }
             else
             {
                 var thumbnailName = $"{name}{THUMBNAIL}.jpg";
                 if (File.Exists(thumbnailName))
-                    pbThumbnail.Image = LoadFromFile(thumbnailName);
+                {
+                    _thumbnail = new Bitmap(LoadFromFile(thumbnailName));
+                    pbThumbnail.Image = ClipToCircle(_thumbnail, THUMBNAIL_CENTER, THUMBNAIL_RADIUS, THUMBNAIL_BACKGROUND);
+                }
             }
         }
 
@@ -159,10 +169,16 @@ namespace ImageCropper
             if (_file?.Exists == true)
             {
                 TryLoadThumbnail(filename);
-                this.Text = $"Thumbnail Creator - {_file.Name}";
-                Image img = LoadFromFile(_file.FullName);
-                _original = (Image)img.Clone();
-                pbViewer.Image = img;
+                try
+                {
+                    Image img = LoadFromFile(_file.FullName);
+                    _original = (Image)img.Clone();
+                    pbViewer.Image = img;
+                    this.Text = $"Thumbnail Creator - {_file.Name}";
+                }
+                catch
+                {
+                }
             }
         }
         public Image ClipToCircle(Image srcImage, PointF center, float radius, Color backGround)
@@ -213,9 +229,9 @@ namespace ImageCropper
             var rectangle = new Rectangle(left, top, size * 2, size * 2);
             var bitmap = new Bitmap(_original);
             var crop = bitmap.Clone(rectangle, System.Drawing.Imaging.PixelFormat.DontCare);
-            _thumbnail = new Bitmap(crop, new Size(200, 200));
+            _thumbnail = new Bitmap(crop, new Size((int)THUMBNAIL_RADIUS * 2, (int)THUMBNAIL_RADIUS * 2));
             
-            pbThumbnail.Image = ClipToCircle(_thumbnail, new PointF(100,100), 100, Color.FromArgb(128,0,0,0));
+            pbThumbnail.Image = ClipToCircle(_thumbnail, THUMBNAIL_CENTER, THUMBNAIL_RADIUS, THUMBNAIL_BACKGROUND);
         }
 
         private void SaveThumbnail()
